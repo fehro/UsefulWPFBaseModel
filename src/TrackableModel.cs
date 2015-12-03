@@ -9,7 +9,8 @@ public abstract class TrackableModel : ViewModelBase, IChangeTracking
 {
     #region Global Variables / Properties
 
-    private List<KeyValuePair<string, object>> _databaseValues;
+    //The list of pristine values.
+    private List<KeyValuePair<string, object>> _pristineValues;
 
     private bool _changeTracking;
 
@@ -21,43 +22,41 @@ public abstract class TrackableModel : ViewModelBase, IChangeTracking
     {
         _changeTracking = false;
         PropertyChanged += new PropertyChangedEventHandler(OnNotifiedOfPropertyChanged);
-        _databaseValues = new List<KeyValuePair<string, object>>();
+        _pristineValues = new List<KeyValuePair<string, object>>();
     }
 
     #endregion
 
-    #region Protected Methods
+    #region Private Methods
 
     /// <summary>
-    /// Get the database value (if any) with the provided property expression.
+    /// Get the pristine value (if any) for the provided property expression.
     /// </summary>
-    protected object GetDatabaseValue<T>(Expression<Func<T>> propertyExpression)
+    private object GetPristineValue<T>(Expression<Func<T>> propertyExpression)
     {
-        return GetDatabaseValue(GetPropertyName(propertyExpression));
+        return GetPristineValue(GetPropertyName(propertyExpression));
     }
 
     /// <summary>
-    /// Get the database value (if any) with the provided property name.
+    /// Get the pristine value (if any) for the provided property name.
     /// </summary>
-    protected object GetDatabaseValue(string propertyName)
+    private object GetPristineValue(string propertyName)
     {
-        var databaseValue = _databaseValues.SingleOrDefault(x => x.Key == propertyName);
-
-        return databaseValue.Value;
+        return _pristineValues.SingleOrDefault(x => x.Key == propertyName).Value;
     }
 
     /// <summary>
-    /// Get the property value with the provided property expression.
+    /// Get the property value for the provided property expression.
     /// </summary>
-    protected object GetPropertyValue<T>(Expression<Func<T>> propertyExpression)
+    private object GetPropertyValue<T>(Expression<Func<T>> propertyExpression)
     {
         return GetPropertyValue(GetPropertyName(propertyExpression));
     }
 
     /// <summary>
-    /// Get the property value with the provided property name.
+    /// Get the property value for the provided property name.
     /// </summary>
-    protected object GetPropertyValue(string propertyName)
+    private object GetPropertyValue(string propertyName)
     {
         var propertyInfo = GetType().GetProperty(propertyName);
 
@@ -67,7 +66,7 @@ public abstract class TrackableModel : ViewModelBase, IChangeTracking
     /// <summary>
     /// Return true or false if the property with the provided name is trackable.
     /// </summary>
-    protected bool IsTrackableProperty(string propertyName)
+    private bool IsTrackableProperty(string propertyName)
     {
         var propertyInfo = GetType().GetProperty(propertyName);
 
@@ -75,57 +74,61 @@ public abstract class TrackableModel : ViewModelBase, IChangeTracking
     }
 
     /// <summary>
-    /// Set the database value for the property with the provided name.
+    /// Set the pristine value for the property with the provided name.
     /// </summary>
-    protected void SetDatabaseValue(string propertyName, object propertyValue)
+    private void SetPristineValue(string propertyName, object propertyValue)
     {
-        //See if the database value has been set yet.
-        var index = _databaseValues.FindIndex(x => x.Key == propertyName);
+        //See if the pristine value has been set yet.
+        var index = _pristineValues.FindIndex(x => x.Key == propertyName);
 
         if (index == -1)
         {
-            //Property value has not been added yet to the list of database values. So add it.
-            _databaseValues.Add(new KeyValuePair<string, object>(propertyName, propertyValue));
+            //Property value has not been added yet to the list of pristine values. So add it.
+            _pristineValues.Add(new KeyValuePair<string, object>(propertyName, propertyValue));
             return;
         }
 
         //Property value has already been added so update it.
-        _databaseValues[index] = new KeyValuePair<string, object>(propertyName, propertyValue);
+        _pristineValues[index] = new KeyValuePair<string, object>(propertyName, propertyValue);
     }
 
-    #endregion
-
-    #region Private Methods
-
     /// <summary>
-    /// Sets the IsChanged value to true if a property has changed.
+    /// If we are tracking changes and a trackable property has changed 
+    /// then raise a property changed event for the IsChanged property. 
     /// </summary>
     private void OnNotifiedOfPropertyChanged(object sender, PropertyChangedEventArgs e)
     {
-        if (e != null && IsTrackableProperty(e.PropertyName))
-        {
-            if (_changeTracking)
-            {
-                //If we have allowed change tracking then raise the property change event and return.
-                RaisePropertyChanged(() => IsChanged);
-                return;
-            }
-
-            //If change tracking is not enabled then we must be still populating the inital model and have not enabled change tracking.
-            var propertyValue = GetPropertyValue(e.PropertyName);
-
-            //Set the database value.
-            SetDatabaseValue(e.PropertyName, propertyValue);
-        }
+        if (_changeTracking && e != null && IsTrackableProperty(e.PropertyName))
+            RaisePropertyChanged(() => IsChanged);
     }
 
     /// <summary>
     /// Return true or false if the values are equal.
     /// </summary>
-    private bool IsEqual(object value1, object value2)
+    private bool AreEqual(object value1, object value2)
     {
         return Newtonsoft.Json.JsonConvert.SerializeObject(value1) ==
             Newtonsoft.Json.JsonConvert.SerializeObject(value2);
+    }
+
+    /// <summary>
+    /// Populate the pristine values for each trackable property.
+    /// </summary>
+    private void PopulatePristineValues()
+    {
+        //Get all the properties with the trackable attribute.
+        var properties = GetType().GetProperties().Where(prop =>
+            Attribute.IsDefined(prop, typeof(TrackableAttribute))).ToList();
+
+        //Loop the properties saving their values to the list of pristine values.
+        foreach (var property in properties)
+        {
+            //Get the property value.
+            var propertyValue = GetPropertyValue(property.Name);
+
+            //Set the pristine value.
+            SetPristineValue(property.Name, propertyValue);
+        }
     }
 
     #endregion
@@ -146,35 +149,37 @@ public abstract class TrackableModel : ViewModelBase, IChangeTracking
             //Loop till a change is found.
             foreach (var property in properties)
             {
-                //Get the database value (if any).
-                var databaseValue = GetDatabaseValue(property.Name);
+                //Get the pristine value (if any).
+                var pristineValue = GetPristineValue(property.Name);
 
                 //Get the property value.
                 var propertyValue = GetPropertyValue(property.Name);
 
-                if (!IsEqual(propertyValue, databaseValue))
+                //If the property has changed return true.
+                if (!AreEqual(propertyValue, pristineValue))
                     return true;
             }
 
-            //No changes found.
+            //No changes found. Return false.
             return false;
         }
     }
 
     /// <summary>
-    /// Return true or false if the provided property has changed from it's database value.
+    /// Return true or false if the provided property has changed from it's pristine value.
     /// </summary>
     public bool HasChanged<T>(Expression<Func<T>> propertyExpression)
     {
+        //If change tracking is not enabled throw an exception.
         if (!_changeTracking) throw new Exception("Change tracking is not enabled");
 
-        //Get the database value (if any).
-        var databaseValue = GetDatabaseValue(propertyExpression);
+        //Get the pristine value (if any).
+        var pristineValue = GetPristineValue(propertyExpression);
 
         //Get the property value.
         var propertyValue = GetPropertyValue(propertyExpression);
 
-        return !IsEqual(databaseValue, propertyValue);
+        return !AreEqual(pristineValue, propertyValue);
     }
 
     /// <summary>
@@ -182,15 +187,13 @@ public abstract class TrackableModel : ViewModelBase, IChangeTracking
     /// </summary>
     public void AcceptChanges()
     {
+        //If change tracking is not enabled throw an exception.
         if (!_changeTracking) throw new Exception("Change tracking is not enabled");
 
-        //Sync the changes in each tracked property to the database values.
-        for (var i = 0; i < _databaseValues.Count; i++)
-        {
-            var propertyValue = GetPropertyValue(_databaseValues[i].Key);
-            _databaseValues[i] = new KeyValuePair<string, object>(_databaseValues[i].Key, propertyValue);
-        }
+        //Populate the pristine values.
+        PopulatePristineValues();
 
+        //Raise a property changed event for the IsChanged property.
         RaisePropertyChanged(() => IsChanged);
     }
 
@@ -199,9 +202,13 @@ public abstract class TrackableModel : ViewModelBase, IChangeTracking
     /// </summary>
     public void EnableChangeTracking()
     {
+        //If change tracking is already enabled then throw an exception.
         if (_changeTracking) throw new Exception("Change tracking is already enabled");
 
         _changeTracking = true;
+
+        //Populate the pristine values.
+        PopulatePristineValues();
     }
 
     #endregion
