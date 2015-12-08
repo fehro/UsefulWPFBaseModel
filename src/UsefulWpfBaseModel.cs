@@ -234,6 +234,9 @@ public abstract class UsefulWpfBaseModel : ViewModelBase, IChangeTracking
             //Get the property value.
             var propertyValue = GetPropertyValue(property.Name);
 
+            //Skip the value if it is null.
+            if (propertyValue == null) continue;
+
             //If the type of the property value is not string throw an exception.
             if (!(propertyValue is string))
                 throw new Exception(string.Format("Cannot perform email validation on property {0} which is not of type string", property.Name));
