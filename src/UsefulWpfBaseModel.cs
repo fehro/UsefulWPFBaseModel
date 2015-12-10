@@ -17,11 +17,24 @@ using System.Linq.Expressions;
 /// http://www.mvvmlight.net/
 /// ---------------------------------------------------------------------------------------
 /// </summary>
+/// <summary>
+/// ---------------------------------------------------------------------------------------
+/// Useful WPF Base Model
+/// ---------------------------------------------------------------------------------------
+/// A useful WPF base model class that allows:
+/// - Change tracking.
+/// - Data validation.
+/// ---------------------------------------------------------------------------------------
+/// Requires GalaSoft MVVM Light.
+/// http://www.mvvmlight.net/
+/// ---------------------------------------------------------------------------------------
+/// </summary>
 public abstract class UsefulWpfBaseModel : ViewModelBase, IChangeTracking
 {
     #region Global Variables / Properties
 
     protected const string EmailRegex = "^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+$";
+    protected const string PhoneNumberRegex = "^[0-9 ]+$";
 
     protected List<KeyValuePair<string, object>> _pristineValues;
 
@@ -36,15 +49,19 @@ public abstract class UsefulWpfBaseModel : ViewModelBase, IChangeTracking
         {
             var returnValue = new List<KeyValuePair<string, List<string>>>();
 
-            //Get all the properties with the validation attribute.
-            var properties = GetPropertiesWithAttribute(typeof(ValidationAttribute));
-
             //Perform email validation on the provided properties.
-            var errors = PerformEmailValidation(GetPropertiesWithAttribute(properties, typeof(EmailValidationAttribute)));
+            var properties = GetPropertiesWithAttribute(typeof(EmailValidationAttribute));
+            var errors = PerformEmailValidation(properties);
+            AddModelStateErrors(ref returnValue, errors);
+
+            //Perform phone number validation on the provided properties.
+            properties = GetPropertiesWithAttribute(typeof(PhoneNumberValidationAttribute));
+            errors = PerformPhoneNumberValidation(properties);
             AddModelStateErrors(ref returnValue, errors);
 
             //Perform required validation on the provided properties.
-            errors = PerformRequiredValidation(GetPropertiesWithAttribute(properties, typeof(RequiredValidationAttribute)));
+            properties = GetPropertiesWithAttribute(typeof(RequiredValidationAttribute));
+            errors = PerformRequiredValidation(properties);
             AddModelStateErrors(ref returnValue, errors);
 
             return returnValue;
@@ -166,17 +183,27 @@ public abstract class UsefulWpfBaseModel : ViewModelBase, IChangeTracking
     /// <summary>
     /// Get the properties in the model that have the provided attribute type.
     /// </summary>
-    protected List<System.Reflection.PropertyInfo> GetPropertiesWithAttribute(Type type)
+    protected List<System.Reflection.PropertyInfo> GetPropertiesWithAttribute(Type attributeType)
     {
-        return GetPropertiesWithAttribute(GetType().GetProperties().ToList(), type);
+        return GetPropertiesWithAttribute(GetType().GetProperties().ToList(), attributeType);
     }
 
     /// <summary>
     /// Get the properties in the provided list that have the provided attribute type.
     /// </summary>
-    protected List<System.Reflection.PropertyInfo> GetPropertiesWithAttribute(List<System.Reflection.PropertyInfo> properties, Type type)
+    protected List<System.Reflection.PropertyInfo> GetPropertiesWithAttribute(List<System.Reflection.PropertyInfo> properties, Type attributeType)
     {
-        return properties.Where(prop => Attribute.IsDefined(prop, type)).ToList();
+        return properties.Where(prop => Attribute.IsDefined(prop, attributeType)).ToList();
+    }
+
+    /// <summary>
+    /// Get the message from the provided property for the provided attribute type.
+    /// </summary>
+    protected string GetAttributeMessage(System.Reflection.PropertyInfo property, Type attributeType)
+    {
+        BaseValidationAttribute attribute = (BaseValidationAttribute)Attribute.GetCustomAttribute(property, attributeType);
+
+        return attribute.Message;
     }
 
     /// <summary>
@@ -212,11 +239,28 @@ public abstract class UsefulWpfBaseModel : ViewModelBase, IChangeTracking
             var propertyValue = GetPropertyValue(property.Name);
 
             if (propertyValue == null || string.IsNullOrEmpty(propertyValue.ToString()))
+            {
+                //See if there is a custom message.
+                var message = GetAttributeMessage(property, typeof(RequiredValidationAttribute));
+
+                //If there was no custom message just generate one.
+                if (string.IsNullOrEmpty(message))
+                    message = string.Format("{0} is required", property.Name);
+
                 //The property value is null or empty. Add an error to the model state.
-                AddModelStateError(ref returnValue, property.Name, string.Format("{0} is required", property.Name));
+                AddModelStateError(ref returnValue, property.Name, message);
+            }
         }
 
         return returnValue;
+    }
+
+    /// <summary>
+    /// Perform phone number validation for the provided list of properties.
+    /// </summary>
+    protected List<KeyValuePair<string, List<string>>> PerformPhoneNumberValidation(List<System.Reflection.PropertyInfo> properties)
+    {
+        return PerformRegexValidation(properties, PhoneNumberRegex, typeof(PhoneNumberValidationAttribute), "phone number");
     }
 
     /// <summary>
@@ -224,9 +268,17 @@ public abstract class UsefulWpfBaseModel : ViewModelBase, IChangeTracking
     /// </summary>
     protected List<KeyValuePair<string, List<string>>> PerformEmailValidation(List<System.Reflection.PropertyInfo> properties)
     {
+        return PerformRegexValidation(properties, EmailRegex, typeof(EmailValidationAttribute), "email");
+    }
+
+    /// <summary>
+    /// Perform regex validation on the provided properties with the provided pattern.
+    /// </summary>
+    protected List<KeyValuePair<string, List<string>>> PerformRegexValidation(List<System.Reflection.PropertyInfo> properties, string regexPattern, Type attributeType, string validationTypeFriendlyName)
+    {
         var returnValue = new List<KeyValuePair<string, List<string>>>();
 
-        var regex = new Regex(EmailRegex);
+        var regex = new Regex(regexPattern);
 
         //Loop the properties validating them.
         foreach (var property in properties)
@@ -237,13 +289,22 @@ public abstract class UsefulWpfBaseModel : ViewModelBase, IChangeTracking
             //Skip the value if it is null.
             if (propertyValue == null) continue;
 
-            //If the type of the property value is not string throw an exception.
             if (!(propertyValue is string))
-                throw new Exception(string.Format("Cannot perform email validation on property {0} which is not of type string", property.Name));
+                //The type of the property value is not string so throw an exception.
+                throw new Exception(string.Format("Cannot perform {0} validation on property {1} which is not of type string", validationTypeFriendlyName, property.Name));
 
-            if (!regex.IsMatch(propertyValue.ToString()))
-                //The property value is not a valid email. Add an error to the model state.
-                AddModelStateError(ref returnValue, property.Name, string.Format("{0} is not a valid email", property.Name));
+            if (!String.IsNullOrEmpty(propertyValue.ToString()) && !regex.IsMatch(propertyValue.ToString()))
+            {
+                //See if there is a custom message.
+                var message = GetAttributeMessage(property, attributeType);
+
+                //If there was no custom message just generate one.
+                if (string.IsNullOrEmpty(message))
+                    message = string.Format("{0} is not a valid {1}", property.Name, validationTypeFriendlyName);
+
+                //The property value is not a valid. Add an error to the model state.
+                AddModelStateError(ref returnValue, property.Name, message);
+            }
 
         }
 
@@ -323,6 +384,9 @@ public abstract class UsefulWpfBaseModel : ViewModelBase, IChangeTracking
 
         //Populate the pristine values.
         PopulatePristineValues();
+
+        //Raise an initial ischange property changed event.
+        RaisePropertyChanged(() => IsChanged);
     }
 
     #endregion
@@ -377,13 +441,51 @@ public abstract class UsefulWpfBaseModel : ViewModelBase, IChangeTracking
     #endregion
 }
 
-[AttributeUsage(AttributeTargets.Property)]
-public class TrackableAttribute : System.Attribute { }
+public class BaseValidationAttribute : Attribute
+{
+    #region Global Variables / Properties 
 
-public class ValidationAttribute : System.Attribute { }
+    private string _message;
+
+    public virtual string Message { get { return _message; } }
+
+    #endregion
+
+    #region Constructor
+
+    public BaseValidationAttribute(string message)
+    {
+        _message = message;
+    }
+
+    public BaseValidationAttribute() { }
+
+    #endregion
+}
 
 [AttributeUsage(AttributeTargets.Property)]
-public class EmailValidationAttribute : ValidationAttribute { }
+public class TrackableAttribute : Attribute { }
 
 [AttributeUsage(AttributeTargets.Property)]
-public class RequiredValidationAttribute : ValidationAttribute { }
+public class EmailValidationAttribute : BaseValidationAttribute
+{
+    public EmailValidationAttribute(string message) : base(message) { }
+
+    public EmailValidationAttribute() { }
+}
+
+[AttributeUsage(AttributeTargets.Property)]
+public class PhoneNumberValidationAttribute : BaseValidationAttribute
+{
+    public PhoneNumberValidationAttribute(string message) : base(message) { }
+
+    public PhoneNumberValidationAttribute() { }
+}
+
+[AttributeUsage(AttributeTargets.Property)]
+public class RequiredValidationAttribute : BaseValidationAttribute
+{
+    public RequiredValidationAttribute(string message) : base(message) { }
+
+    public RequiredValidationAttribute() { }
+}
